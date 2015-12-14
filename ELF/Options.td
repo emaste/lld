@@ -14,6 +14,8 @@ def L : JoinedOrSeparate<["-"], "L">, MetaVarName<"<dir>">,
 
 def O : Joined<["-"], "O">, HelpText<"Optimize">;
 
+def Ttext : Separate<["-"], "Ttext">, HelpText<"Text segment start address">;
+
 def allow_multiple_definition: Flag<["--"], "allow-multiple-definition">,
   HelpText<"Allow multiple definitions">;
 
@@ -119,6 +121,7 @@ def alias_Bstatic_dn: Flag<["-"], "dn">, Alias<Bstatic>;
 def alias_Bstatic_non_shared: Flag<["-"], "non_shared">, Alias<Bstatic>;
 def alias_Bstatic_static: Flag<["-"], "static">, Alias<Bstatic>;
 def alias_L__library_path : Joined<["--"], "library-path=">, Alias<L>;
+def alias_Ttext_Ttext_segment: Separate<["-"], "Ttext-segment">, Alias<Ttext>;
 def alias_discard_all_x: Flag<["-"], "x">, Alias<discard_all>;
 def alias_discard_locals_X: Flag<["-"], "X">, Alias<discard_locals>;
 def alias_entry_e : Separate<["-"], "e">, Alias<entry>;

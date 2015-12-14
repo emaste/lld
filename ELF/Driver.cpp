@@ -182,6 +182,12 @@ void LinkerDriver::createFiles(opt::InputArgList &Args) {
   Config->ZOrigin = hasZOption(Args, "origin");
   Config->ZRelro = !hasZOption(Args, "norelro");
 
+  if (auto *Arg = Args.getLastArg(OPT_Ttext)) {
+    StringRef Val = Arg->getValue();
+    if (Val.getAsInteger(0, Config->VAStart))
+      error("Invalid text segment address");
+  }
+
   if (auto *Arg = Args.getLastArg(OPT_O)) {
     StringRef Val = Arg->getValue();
     if (Val.getAsInteger(10, Config->Optimize))

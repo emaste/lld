@@ -239,7 +239,11 @@ bool TargetInfo::isTlsOptimized(unsigned Type, const SymbolBody *S) const {
   return false;
 }
 
-uint64_t TargetInfo::getVAStart() const { return Config->Shared ? 0 : VAStart; }
+uint64_t TargetInfo::getVAStart() const {
+  if (Config->VAStart != (uint64_t)-1)
+    return Config->VAStart;
+  return Config->Shared ? 0 : VAStart;
+}
 
 bool TargetInfo::needsCopyRel(uint32_t Type, const SymbolBody &S) const {
   return false;
