@@ -642,6 +642,9 @@ template <class ELFT> void DynamicSection<ELFT>::finalize() {
   if (DtFlags1)
     ++NumEntries; // DT_FLAGS_1
 
+  if (!Config->Entry.empty() && Config->EMachine != EM_MIPS)
+    ++NumEntries; // DT_DEBUG
+
   if (Config->EMachine == EM_MIPS) {
     ++NumEntries; // DT_MIPS_RLD_VERSION
     ++NumEntries; // DT_MIPS_FLAGS
@@ -740,6 +743,8 @@ template <class ELFT> void DynamicSection<ELFT>::writeTo(uint8_t *Buf) {
     WriteVal(DT_FLAGS, DtFlags);
   if (DtFlags1)
     WriteVal(DT_FLAGS_1, DtFlags1);
+  if (!Config->Entry.empty() && Config->EMachine != EM_MIPS)
+    WriteVal(DT_DEBUG, 0);
 
   // See "Dynamic Section" in Chapter 5 in the following document
   // for detailed description:
