@@ -1229,11 +1229,14 @@ bool AArch64TargetInfo::isTlsDescRel(unsigned Type) const {
 }
 
 bool AArch64TargetInfo::isRelRelative(uint32_t Type) const {
-  return Type == R_AARCH64_PREL32 || Type == R_AARCH64_ADR_PREL_PG_HI21 ||
-         Type == R_AARCH64_LDST8_ABS_LO12_NC ||
-         Type == R_AARCH64_LDST32_ABS_LO12_NC ||
-         Type == R_AARCH64_LDST64_ABS_LO12_NC ||
-         Type == R_AARCH64_ADD_ABS_LO12_NC || Type == R_AARCH64_CALL26;
+  switch (Type) {
+  default:
+    return true;
+  case R_AARCH64_ABS64:
+  case R_AARCH64_ADR_GOT_PAGE:
+  case R_AARCH64_LD64_GOT_LO12_NC:
+    return !Config->Shared;
+  }
 }
 
 bool AArch64TargetInfo::isTlsInitialExecRel(uint32_t Type) const {
