@@ -1,4 +1,3 @@
-.text
  .global foo
  .section .tdata,"awT",%progbits
  .align 2
@@ -8,7 +7,6 @@ foo:
  .word 5
  .text
 
-.text
  .global bar
  .section .tdata,"awT",%progbits
  .align 2

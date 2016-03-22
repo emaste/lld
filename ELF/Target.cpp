@@ -184,6 +184,8 @@ public:
                    uint8_t *PairedLoc = nullptr) const override;
   bool refersToGotEntry(uint32_t Type, const SymbolBody &) const override;
 
+  size_t relaxTlsGdToIe(uint8_t *Loc, uint8_t *BufEnd, uint32_t Type,
+                        uint64_t P, uint64_t SA) const override;
   size_t relaxTlsGdToLe(uint8_t *Loc, uint8_t *BufEnd, uint32_t Type,
                         uint64_t P, uint64_t SA) const override;
   size_t relaxTlsIeToLe(uint8_t *Loc, uint8_t *BufEnd, uint32_t Type,
@@ -1369,6 +1371,8 @@ bool AArch64TargetInfo::refersToGotEntry(uint32_t Type,
 }
 
 bool AArch64TargetInfo::needsGot(uint32_t Type, SymbolBody &S) const {
+  if (isTlsDescRel(Type))
+    return S.isPreemptible();
   return refersToGotEntry(Type, S) || needsPlt<ELF64LE>(Type, S);
 }
 
@@ -1561,6 +1565,54 @@ size_t AArch64TargetInfo::relaxTlsGdToLe(uint8_t *Loc, uint8_t *BufEnd,
   return 0;
 }
 
+// Global-Dynamic relocations can be relaxed to Initial-Exec if both binary is
+// an executable and target is not final (can be preempted).
+size_t AArch64TargetInfo::relaxTlsGdToIe(uint8_t *Loc, uint8_t *BufEnd,
+                                         uint32_t Type, uint64_t P,
+                                         uint64_t SA) const {
+  // TLSDESC Global-Dynamic relocation are in the form:
+  //   adrp    x0, :tlsdesc:v             [R_AARCH64_TLSDESC_ADR_PAGE21]
+  //   ldr     x1, [x0, #:tlsdesc_lo12:v] [R_AARCH64_TLSDESC_LD64_LO12_NC]
+  //   add     x0, x0, :tlsdesc_los:v     [R_AARCH64_TLSDESC_ADD_LO12_NC]
+  //   .tlsdesccall                       [R_AARCH64_TLSDESC_CALL]
+  // And it can optimized to:
+  //   adrp    x0, :tlsie:v
+  //   ldr     x0, [x0, :tlsie_lo12:v]
+  //   nop
+  //   nop
+
+  // For Initial-Exec from Global-Dynamic TLS relax the idea is to emit
+  // a R_AARCH64_TLS_TPREL64 dynamic relocation and thus adjust the
+  // tlsdesc call to access the GOT slot adjusted by dynamic linker.
+  checkUInt<32>(SA, Type);
+
+  switch (Type) {
+  case R_AARCH64_TLSDESC_ADD_LO12_NC:
+  case R_AARCH64_TLSDESC_CALL:
+    // nop
+    write32le(Loc, 0xD503201F);
+    break;
+  case R_AARCH64_TLSDESC_ADR_PAGE21: {
+    // adrp
+    uint64_t X = getAArch64Page(SA) - getAArch64Page(P);
+    updateAArch64Addr(Loc, (X >> 12) & 0x1FFFFF); // X[32:12]
+    return 0;
+  }
+  case R_AARCH64_TLSDESC_LD64_LO12_NC: {
+    // ldr with target register being 'x0'
+    uint32_t NewInst = read32le(Loc) & 0xFFFFFFE0;
+    NewInst |= (SA & 0xFF8) << 7;
+    write32le(Loc, NewInst);
+    break;
+  }
+  default:
+    llvm_unreachable("Unsupported relocation for TLS GD to IE relaxation");
+  }
+  return 0;
+}
+
+// Initial-Exec relocations can be relaxed to Local-Exec if symbol is final
+// (can not be preempted).
 size_t AArch64TargetInfo::relaxTlsIeToLe(uint8_t *Loc, uint8_t *BufEnd,
                                          uint32_t Type, uint64_t P,
                                          uint64_t SA) const {
