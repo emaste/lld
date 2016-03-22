@@ -269,6 +269,18 @@ void InputSectionBase<ELFT>::relocate(uint8_t *Buf, uint8_t *BufEnd,
       continue;
     }
 
+    // TLS descriptor lazy relocations are specific. They
+    // uses two words in the .got.plt. A single relocation is to be used to
+    // compute the value of the two words of the TLS descriptor.
+    // Overall design can be found in
+    // "Thread-Local Storage Descriptors for IA32 and AMD64/EM64T"
+    // http://www.fsfla.org/~lxoliva/writeups/TLS/RFC-TLSDESC-x86.txt
+    if (Target->isTlsDescRel(Type)) {
+      Target->relocateOne(BufLoc, BufEnd, Type, AddrLoc,
+                          Body.getGotPltRevVA<ELFT>() + A);
+      continue;
+    }
+
     uintX_t SymVA = Body.getVA<ELFT>(A);
     uint8_t *PairedLoc = nullptr;
     if (Config->EMachine == EM_MIPS)

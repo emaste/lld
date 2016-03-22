@@ -134,6 +134,12 @@ template <class ELFT> typename ELFT::uint SymbolBody::getGotPltVA() const {
   return Out<ELFT>::GotPlt->getVA() + GotPltIndex * sizeof(typename ELFT::uint);
 }
 
+template <class ELFT> typename ELFT::uint SymbolBody::getGotPltRevVA() const {
+  return Out<ELFT>::GotPlt->getVA() +
+         Out<ELFT>::GotPlt->getTailIndex(GotPltIndex) *
+             sizeof(typename ELFFile<ELFT>::uintX_t);
+}
+
 template <class ELFT> typename ELFT::uint SymbolBody::getPltVA() const {
   return Out<ELFT>::Plt->getVA() + Target->PltZeroSize +
          PltIndex * Target->PltEntrySize;
@@ -298,6 +304,11 @@ template uint32_t SymbolBody::template getGotPltVA<ELF32LE>() const;
 template uint32_t SymbolBody::template getGotPltVA<ELF32BE>() const;
 template uint64_t SymbolBody::template getGotPltVA<ELF64LE>() const;
 template uint64_t SymbolBody::template getGotPltVA<ELF64BE>() const;
+
+template uint32_t SymbolBody::template getGotPltRevVA<ELF32LE>() const;
+template uint32_t SymbolBody::template getGotPltRevVA<ELF32BE>() const;
+template uint64_t SymbolBody::template getGotPltRevVA<ELF64LE>() const;
+template uint64_t SymbolBody::template getGotPltRevVA<ELF64BE>() const;
 
 template uint32_t SymbolBody::template getPltVA<ELF32LE>() const;
 template uint32_t SymbolBody::template getPltVA<ELF32BE>() const;

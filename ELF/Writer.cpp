@@ -288,6 +288,31 @@ static bool handleTlsRelocation(uint32_t Type, SymbolBody &Body,
     if (!Body.isPreemptible())
       return true;
   }
+
+  // If module uses TLS descriptor relocations,
+  // then special entries are created for module:
+  // 1) .got entry to be filled in by the dynamic loader with the
+  //  address of the internal function to be used for lazy relocation of TLS
+  //  descriptors.
+  // 2) Special .plt entry that
+  //  pushes onto the stack the module's link map address, located in the
+  //  GOT portion reserved for the dynamic loader to use, and then jumps to
+  //  the lazy relocation function, using the address stored in the
+  //  TLSDESC_GOT entry.
+  // For each Body itself two words are allocated in .got.plt instead of
+  // usual .got, because these relocations are lazy ones.
+  if (Target->isTlsDescRel(Type)) {
+    if (!Target->canRelaxTls(Type, &Body)) {
+      Out<ELFT>::Got->addTlsDescEntry();
+      if (Body.isInGotPlt())
+        return true;
+      Out<ELFT>::GotPlt->addTlsDescEntry(Body);
+      Out<ELFT>::RelaPlt->addTlsDescReloc(
+          {Target->TlsDescRel, DynamicReloc<ELFT>::Off_GotPltRev, &Body});
+      return true;
+    }
+  }
+
   return false;
 }
 

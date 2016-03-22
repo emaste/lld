@@ -88,6 +88,7 @@ public:
   uint32_t PltIndex = -1;
   bool hasGlobalDynIndex() { return GlobalDynIndex != uint32_t(-1); }
   bool isInGot() const { return GotIndex != -1U; }
+  bool isInGotPlt() const { return GotPltIndex != -1U; }
   bool isInPlt() const { return PltIndex != -1U; }
 
   template <class ELFT>
@@ -95,6 +96,7 @@ public:
 
   template <class ELFT> typename ELFT::uint getGotVA() const;
   template <class ELFT> typename ELFT::uint getGotPltVA() const;
+  template <class ELFT> typename ELFT::uint getGotPltRevVA() const;
   template <class ELFT> typename ELFT::uint getPltVA() const;
   template <class ELFT> typename ELFT::uint getSize() const;
 

@@ -101,6 +101,7 @@ public:
   void writeTo(uint8_t *Buf) override;
   void addEntry(SymbolBody &Sym);
   bool addDynTlsEntry(SymbolBody &Sym);
+  void addTlsDescEntry();
   bool addTlsIndex();
   bool empty() const { return MipsLocalEntries == 0 && Entries.empty(); }
   uintX_t getMipsLocalFullAddr(const SymbolBody &B);
@@ -119,10 +120,13 @@ public:
   unsigned getMipsLocalEntriesNum() const;
 
   uintX_t getTlsIndexVA() { return Base::getVA() + TlsIndexOff; }
+  uintX_t getTlsDescEntryVA() const { return Base::getVA() + TlsDescEntryOff; }
+  bool hasTlsDescEntry() const { return TlsDescEntryOff != (uintX_t)-1; }
 
 private:
   std::vector<const SymbolBody *> Entries;
   uint32_t TlsIndexOff = -1;
+  uintX_t TlsDescEntryOff = -1;
   uint32_t MipsLocalEntries = 0;
   llvm::DenseMap<uintX_t, size_t> MipsLocalGotPos;
 
@@ -138,9 +142,12 @@ public:
   void finalize() override;
   void writeTo(uint8_t *Buf) override;
   void addEntry(SymbolBody &Sym);
+  void addTlsDescEntry(SymbolBody &Sym);
   bool empty() const;
+  size_t getTailIndex(uint32_t I);
 
 private:
+  size_t Tail = 0;
   std::vector<const SymbolBody *> Entries;
 };
 
@@ -153,7 +160,8 @@ public:
   void finalize() override;
   void writeTo(uint8_t *Buf) override;
   void addEntry(SymbolBody &Sym);
-  bool empty() const { return Entries.empty(); }
+  bool empty() const;
+  uintX_t getTlsDescEntryVA() const;
 
 private:
   std::vector<std::pair<const SymbolBody *, unsigned>> Entries;
@@ -167,6 +175,7 @@ template <class ELFT> struct DynamicReloc {
   enum OffsetKind {
     Off_Got,       // The got entry of Sym.
     Off_GotPlt,    // The got.plt entry of Sym.
+    Off_GotPltRev,
     Off_Bss,       // The bss entry of Sym (copy reloc).
     Off_Sec,       // The final position of the given input section and offset.
     Off_LTlsIndex, // The local tls index.
@@ -240,6 +249,7 @@ class RelocationSection final : public OutputSectionBase<ELFT> {
 public:
   RelocationSection(StringRef Name);
   void addReloc(const DynamicReloc<ELFT> &Reloc);
+  void addTlsDescReloc(const DynamicReloc<ELFT> &Reloc);
   unsigned getRelocOffset();
   void finalize() override;
   void writeTo(uint8_t *Buf) override;
@@ -248,6 +258,7 @@ public:
   bool Static = false;
 
 private:
+  size_t Tail = 0;
   std::vector<DynamicReloc<ELFT>> Relocs;
 };
 
@@ -416,7 +427,9 @@ class DynamicSection final : public OutputSectionBase<ELFT> {
   // The .dynamic section contains information for the dynamic linker.
   // The section consists of fixed size entries, which consist of
   // type and value fields. Value are one of plain integers, symbol
-  // addresses, or section addresses. This struct represents the entry.
+  // addresses, or section addresses. Also value can be of special type.
+  // Such ones are handled depending on Tag value in writeTo(). This struct
+  // represents the entry.
   struct Entry {
     int32_t Tag;
     union {
@@ -424,12 +437,13 @@ class DynamicSection final : public OutputSectionBase<ELFT> {
       uint64_t Val;
       const SymbolBody *Sym;
     };
-    enum KindT { SecAddr, SymAddr, PlainInt } Kind;
+    enum KindT { SecAddr, SymAddr, PlainInt, Special } Kind;
     Entry(int32_t Tag, OutputSectionBase<ELFT> *OutSec)
         : Tag(Tag), OutSec(OutSec), Kind(SecAddr) {}
     Entry(int32_t Tag, uint64_t Val) : Tag(Tag), Val(Val), Kind(PlainInt) {}
     Entry(int32_t Tag, const SymbolBody *Sym)
         : Tag(Tag), Sym(Sym), Kind(SymAddr) {}
+    Entry(int32_t Tag) : Tag(Tag), Kind(Special) {}
   };
 
   // finalize() fills this vector with the section contents. finalize()

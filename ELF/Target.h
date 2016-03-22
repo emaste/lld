@@ -27,6 +27,9 @@ public:
   virtual bool isTlsLocalDynamicRel(uint32_t Type) const;
   virtual bool isTlsGlobalDynamicRel(uint32_t Type) const;
   virtual uint32_t getDynRel(uint32_t Type) const { return Type; }
+  virtual bool isTlsDescRel(unsigned Type) const {
+    return false;
+  }
   virtual uint32_t getTlsGotRel(uint32_t Type) const { return TlsGotRel; }
   virtual void writeGotHeader(uint8_t *Buf) const {}
   virtual void writeGotPltHeader(uint8_t *Buf) const {}
@@ -40,6 +43,10 @@ public:
   virtual void writePlt(uint8_t *Buf, uint64_t GotEntryAddr,
                         uint64_t PltEntryAddr, int32_t Index,
                         unsigned RelOff) const {}
+
+  virtual void writePltTlsDescEntry(uint8_t *Buf, uint64_t PltEntryAddr,
+                                    uint64_t GotTlsDescEntryAddr,
+                                    uint64_t GotPltVA) const {};
 
   // Returns true if a relocation is just a hint for linker to make for example
   // some code optimization. Such relocations should not be handled as a regular
@@ -56,7 +63,7 @@ public:
   virtual bool isSizeRel(uint32_t Type) const;
   virtual bool needsDynRelative(uint32_t Type) const { return false; }
   virtual bool needsGot(uint32_t Type, SymbolBody &S) const;
-  virtual bool refersToGotEntry(uint32_t Type) const;
+  virtual bool refersToGotEntry(uint32_t Type, const SymbolBody &S) const;
 
   enum PltNeed { Plt_No, Plt_Explicit, Plt_Implicit };
   template <class ELFT>
@@ -88,10 +95,12 @@ public:
   uint32_t PltRel;
   uint32_t RelativeRel;
   uint32_t IRelativeRel;
+  uint32_t TlsDescRel;
   uint32_t TlsGotRel = 0;
   uint32_t TlsModuleIndexRel;
   uint32_t TlsOffsetRel;
   unsigned PltEntrySize = 8;
+  unsigned PltTlsDescSize = 0;
   unsigned PltZeroSize = 0;
   unsigned GotHeaderEntriesNum = 0;
   unsigned GotPltHeaderEntriesNum = 3;

@@ -103,7 +103,7 @@ public:
                         uint64_t P, uint64_t SA) const override;
 
   bool isGotRelative(uint32_t Type) const override;
-  bool refersToGotEntry(uint32_t Type) const override;
+  bool refersToGotEntry(uint32_t Type, const SymbolBody &S) const override;
 };
 
 class X86_64TargetInfo final : public TargetInfo {
@@ -121,7 +121,7 @@ public:
                 int32_t Index, unsigned RelOff) const override;
   bool needsCopyRelImpl(uint32_t Type) const override;
   bool needsGot(uint32_t Type, SymbolBody &S) const override;
-  bool refersToGotEntry(uint32_t Type) const override;
+  bool refersToGotEntry(uint32_t Type, const SymbolBody &S) const override;
   bool needsPltImpl(uint32_t Type) const override;
   void relocateOne(uint8_t *Loc, uint8_t *BufEnd, uint32_t Type, uint64_t P,
                    uint64_t SA, uint64_t ZA = 0,
@@ -165,12 +165,15 @@ class AArch64TargetInfo final : public TargetInfo {
 public:
   AArch64TargetInfo();
   uint32_t getDynRel(uint32_t Type) const override;
-  bool isTlsGlobalDynamicRel(uint32_t Type) const override;
+  bool isTlsDescRel(unsigned Type) const override;
   bool isTlsInitialExecRel(uint32_t Type) const override;
   void writeGotPlt(uint8_t *Buf, uint64_t Plt) const override;
   void writePltZero(uint8_t *Buf) const override;
   void writePlt(uint8_t *Buf, uint64_t GotEntryAddr, uint64_t PltEntryAddr,
                 int32_t Index, unsigned RelOff) const override;
+  void writePltTlsDescEntry(uint8_t *Buf, uint64_t PltEntryAddr,
+                            uint64_t GotTlsDescEntryAddr,
+                            uint64_t GotPltVA) const override;
   uint32_t getTlsGotRel(uint32_t Type) const override;
   bool isRelRelative(uint32_t Type) const override;
   bool needsCopyRelImpl(uint32_t Type) const override;
@@ -179,6 +182,7 @@ public:
   void relocateOne(uint8_t *Loc, uint8_t *BufEnd, uint32_t Type, uint64_t P,
                    uint64_t SA, uint64_t ZA = 0,
                    uint8_t *PairedLoc = nullptr) const override;
+  bool refersToGotEntry(uint32_t Type, const SymbolBody &) const override;
 
   size_t relaxTlsGdToLe(uint8_t *Loc, uint8_t *BufEnd, uint32_t Type,
                         uint64_t P, uint64_t SA) const override;
@@ -214,7 +218,7 @@ public:
                    uint8_t *PairedLoc = nullptr) const override;
   bool isHintRel(uint32_t Type) const override;
   bool isRelRelative(uint32_t Type) const override;
-  bool refersToGotEntry(uint32_t Type) const override;
+  bool refersToGotEntry(uint32_t Type, const SymbolBody &) const override;
 };
 } // anonymous namespace
 
@@ -255,7 +259,7 @@ bool TargetInfo::canRelaxTls(uint32_t Type, const SymbolBody *S) const {
 
   // Global-Dynamic relocs can be relaxed to Initial-Exec or Local-Exec
   // depending on the symbol being locally defined or not.
-  if (isTlsGlobalDynamicRel(Type))
+  if (isTlsDescRel(Type) || isTlsGlobalDynamicRel(Type))
     return true;
 
   // Local-Dynamic relocs can be relaxed to Local-Exec.
@@ -297,7 +301,9 @@ bool TargetInfo::needsGot(uint32_t Type, SymbolBody &S) const { return false; }
 
 bool TargetInfo::needsPltImpl(uint32_t Type) const { return false; }
 
-bool TargetInfo::refersToGotEntry(uint32_t Type) const { return false; }
+bool TargetInfo::refersToGotEntry(uint32_t Type, const SymbolBody&) const {
+  return false;
+}
 
 template <class ELFT>
 TargetInfo::PltNeed TargetInfo::needsPlt(uint32_t Type,
@@ -330,7 +336,7 @@ TargetInfo::PltNeed TargetInfo::needsPlt(uint32_t Type,
   // R_386_JMP_SLOT, etc).
   if (auto *SS = dyn_cast<SharedSymbol<ELFT>>(&S))
     if (!Config->Pic && SS->Sym.getType() == STT_FUNC &&
-        !refersToGotEntry(Type))
+        !refersToGotEntry(Type, S))
       return Plt_Implicit;
 
   return Plt_No;
@@ -351,7 +357,7 @@ bool TargetInfo::isTlsGlobalDynamicRel(uint32_t Type) const {
 size_t TargetInfo::relaxTls(uint8_t *Loc, uint8_t *BufEnd, uint32_t Type,
                             uint64_t P, uint64_t SA,
                             const SymbolBody &S) const {
-  if (isTlsGlobalDynamicRel(Type)) {
+  if (isTlsDescRel(Type) || isTlsGlobalDynamicRel(Type)) {
     if (S.isPreemptible())
       return relaxTlsGdToIe(Loc, BufEnd, Type, P, SA);
     return relaxTlsGdToLe(Loc, BufEnd, Type, P, SA);
@@ -502,7 +508,7 @@ bool X86TargetInfo::isGotRelative(uint32_t Type) const {
   return Type == R_386_GOTOFF;
 }
 
-bool X86TargetInfo::refersToGotEntry(uint32_t Type) const {
+bool X86TargetInfo::refersToGotEntry(uint32_t Type, const SymbolBody &S) const {
   return Type == R_386_GOT32;
 }
 
@@ -735,7 +741,8 @@ bool X86_64TargetInfo::needsCopyRelImpl(uint32_t Type) const {
          Type == R_X86_64_64;
 }
 
-bool X86_64TargetInfo::refersToGotEntry(uint32_t Type) const {
+bool X86_64TargetInfo::refersToGotEntry(uint32_t Type,
+                                        const SymbolBody &S) const {
   return Type == R_X86_64_GOTPCREL || Type == R_X86_64_GOTPCRELX ||
          Type == R_X86_64_REX_GOTPCRELX;
 }
@@ -745,7 +752,7 @@ bool X86_64TargetInfo::needsGot(uint32_t Type, SymbolBody &S) const {
     return Target->canRelaxTls(Type, &S) && S.isPreemptible();
   if (Type == R_X86_64_GOTTPOFF)
     return !canRelaxTls(Type, &S);
-  return refersToGotEntry(Type) || needsPlt<ELF64LE>(Type, S);
+  return refersToGotEntry(Type, S) || needsPlt<ELF64LE>(Type, S);
 }
 
 uint32_t X86_64TargetInfo::getTlsGotRel(uint32_t Type) const {
@@ -1204,12 +1211,21 @@ AArch64TargetInfo::AArch64TargetInfo() {
   IRelativeRel = R_AARCH64_IRELATIVE;
   GotRel = R_AARCH64_GLOB_DAT;
   PltRel = R_AARCH64_JUMP_SLOT;
+  TlsDescRel = R_AARCH64_TLSDESC;
   TlsGotRel = R_AARCH64_TLS_TPREL64;
   TlsModuleIndexRel = R_AARCH64_TLS_DTPMOD64;
   TlsOffsetRel = R_AARCH64_TLS_DTPREL64;
   UseLazyBinding = true;
   PltEntrySize = 16;
   PltZeroSize = 32;
+  PltTlsDescSize = 32;
+}
+
+bool AArch64TargetInfo::isTlsDescRel(unsigned Type) const {
+  return Type == R_AARCH64_TLSDESC_ADR_PAGE21 ||
+         Type == R_AARCH64_TLSDESC_LD64_LO12_NC ||
+         Type == R_AARCH64_TLSDESC_ADD_LO12_NC ||
+         Type == R_AARCH64_TLSDESC_CALL;
 }
 
 bool AArch64TargetInfo::isRelRelative(uint32_t Type) const {
@@ -1220,19 +1236,17 @@ bool AArch64TargetInfo::isRelRelative(uint32_t Type) const {
          Type == R_AARCH64_ADD_ABS_LO12_NC || Type == R_AARCH64_CALL26;
 }
 
-bool AArch64TargetInfo::isTlsGlobalDynamicRel(uint32_t Type) const {
-  return Type == R_AARCH64_TLSDESC_ADR_PAGE21 ||
-         Type == R_AARCH64_TLSDESC_LD64_LO12_NC ||
-         Type == R_AARCH64_TLSDESC_ADD_LO12_NC ||
-         Type == R_AARCH64_TLSDESC_CALL;
-}
-
 bool AArch64TargetInfo::isTlsInitialExecRel(uint32_t Type) const {
   return Type == R_AARCH64_TLSIE_ADR_GOTTPREL_PAGE21 ||
          Type == R_AARCH64_TLSIE_LD64_GOTTPREL_LO12_NC;
 }
 
 uint32_t AArch64TargetInfo::getDynRel(uint32_t Type) const {
+  if (Type == R_AARCH64_TLSDESC_ADR_PAGE21 ||
+      Type == R_AARCH64_TLSDESC_LD64_LO12_NC ||
+      Type == R_AARCH64_TLSDESC_ADD_LO12_NC ||
+      Type == R_AARCH64_TLSDESC_CALL)
+    return R_AARCH64_TLSDESC;
   if (Type == R_AARCH64_ABS32 || Type == R_AARCH64_ABS64)
     return Type;
   StringRef S = getELFRelocationTypeName(EM_AARCH64, Type);
@@ -1287,6 +1301,31 @@ void AArch64TargetInfo::writePlt(uint8_t *Buf, uint64_t GotEntryAddr,
               GotEntryAddr);
 }
 
+void AArch64TargetInfo::writePltTlsDescEntry(uint8_t *Buf,
+                                             uint64_t PltEntryAddr,
+                                             uint64_t GotTlsDescEntryAddr,
+                                             uint64_t GotPltVA) const {
+  const uint8_t Inst[] = {
+      0xe2, 0x0f, 0xbf, 0xa9, // stp x2, x3, [sp, #-16]!
+      0x02, 0x00, 0x00, 0x90, // adrp x2, Page(DT_TLSDESC_GOT)
+      0x03, 0x00, 0x00, 0x90, // adrp x3, Page(&.got.plt[0])
+      0x42, 0x00, 0x40, 0xf9, // ldr x2, [x2, #0]
+      0x63, 0x00, 0x00, 0x91, // add x3, x3, 0
+      0x40, 0x00, 0x1f, 0xd6, // br x2
+      0x1f, 0x20, 0x03, 0xd5, // nop
+      0x1f, 0x20, 0x03, 0xd5  // nop
+  };
+  memcpy(Buf, Inst, sizeof(Inst));
+  relocateOne(Buf + 4, Buf + 8, R_AARCH64_ADR_PREL_PG_HI21, PltEntryAddr + 4,
+              GotTlsDescEntryAddr);
+  relocateOne(Buf + 8, Buf + 12, R_AARCH64_ADR_PREL_PG_HI21, PltEntryAddr + 8,
+              GotPltVA);
+  relocateOne(Buf + 12, Buf + 16, R_AARCH64_LDST64_ABS_LO12_NC,
+              PltEntryAddr + 12, GotTlsDescEntryAddr);
+  relocateOne(Buf + 16, Buf + 20, R_AARCH64_ADD_ABS_LO12_NC, PltEntryAddr + 16,
+              GotPltVA);
+}
+
 uint32_t AArch64TargetInfo::getTlsGotRel(uint32_t Type) const {
   assert(Type == R_AARCH64_TLSIE_ADR_GOTTPREL_PAGE21 ||
          Type == R_AARCH64_TLSIE_LD64_GOTTPREL_LO12_NC);
@@ -1312,7 +1351,8 @@ bool AArch64TargetInfo::needsCopyRelImpl(uint32_t Type) const {
   }
 }
 
-bool AArch64TargetInfo::needsGot(uint32_t Type, SymbolBody &S) const {
+bool AArch64TargetInfo::refersToGotEntry(uint32_t Type, 
+                                         const SymbolBody &S) const {
   switch (Type) {
   case R_AARCH64_TLSIE_ADR_GOTTPREL_PAGE21:
   case R_AARCH64_TLSIE_LD64_GOTTPREL_LO12_NC:
@@ -1321,8 +1361,12 @@ bool AArch64TargetInfo::needsGot(uint32_t Type, SymbolBody &S) const {
   case R_AARCH64_LD64_GOT_LO12_NC:
     return true;
   default:
-    return needsPlt<ELF64LE>(Type, S);
+    return false;
   }
+}
+
+bool AArch64TargetInfo::needsGot(uint32_t Type, SymbolBody &S) const {
+  return refersToGotEntry(Type, S) || needsPlt<ELF64LE>(Type, S);
 }
 
 bool AArch64TargetInfo::needsPltImpl(uint32_t Type) const {
@@ -1390,7 +1434,8 @@ void AArch64TargetInfo::relocateOne(uint8_t *Loc, uint8_t *BufEnd,
     break;
   }
   case R_AARCH64_ADR_PREL_PG_HI21:
-  case R_AARCH64_TLSIE_ADR_GOTTPREL_PAGE21: {
+  case R_AARCH64_TLSIE_ADR_GOTTPREL_PAGE21:
+  case R_AARCH64_TLSDESC_ADR_PAGE21: {
     uint64_t X = getAArch64Page(SA) - getAArch64Page(P);
     checkInt<33>(X, Type);
     updateAArch64Addr(Loc, (X >> 12) & 0x1FFFFF); // X[32:12]
@@ -1411,6 +1456,7 @@ void AArch64TargetInfo::relocateOne(uint8_t *Loc, uint8_t *BufEnd,
   }
   case R_AARCH64_LD64_GOT_LO12_NC:
   case R_AARCH64_TLSIE_LD64_GOTTPREL_LO12_NC:
+  case R_AARCH64_TLSDESC_LD64_LO12_NC:
     checkAlignment<8>(SA, Type);
     or32le(Loc, (SA & 0xFF8) << 7);
     break;
@@ -1421,6 +1467,7 @@ void AArch64TargetInfo::relocateOne(uint8_t *Loc, uint8_t *BufEnd,
     or32le(Loc, (SA & 0x0FFC) << 9);
     break;
   case R_AARCH64_LDST8_ABS_LO12_NC:
+  case R_AARCH64_TLSDESC_ADD_LO12_NC:
     or32le(Loc, (SA & 0xFFF) << 10);
     break;
   case R_AARCH64_LDST32_ABS_LO12_NC:
@@ -1457,6 +1504,11 @@ void AArch64TargetInfo::relocateOne(uint8_t *Loc, uint8_t *BufEnd,
     updateAArch64Add(Loc, V & 0xFFF);
     break;
   }
+  case R_AARCH64_TLSDESC_CALL:
+    // For relaxation only. Must be used to identify a
+    // BLR instruction which performs an indirect call
+    // to the TLS descriptor function for S + A.
+    break;
   default:
     fatal("unrecognized reloc " + Twine(Type));
   }
@@ -1475,6 +1527,10 @@ size_t AArch64TargetInfo::relaxTlsGdToLe(uint8_t *Loc, uint8_t *BufEnd,
   //   movk    x0, #0x10
   //   nop
   //   nop
+
+  // AArch64 uses Variant I of TLS data structures. Thread Control Block is
+  // placed before data. Read "ELF Handling For Thread-Local Storage, 3. Run
+  // Time Handling of TLS" by Ulrich Drepper for details.
   uint64_t TPOff = llvm::alignTo(TcbSize, Out<ELF64LE>::TlsPhdr->p_align);
   uint64_t X = SA + TPOff;
   checkUInt<32>(X, Type);
@@ -1662,11 +1718,12 @@ bool MipsTargetInfo<ELFT>::needsCopyRelImpl(uint32_t Type) const {
 
 template <class ELFT>
 bool MipsTargetInfo<ELFT>::needsGot(uint32_t Type, SymbolBody &S) const {
-  return needsPlt<ELFT>(Type, S) || refersToGotEntry(Type);
+  return needsPlt<ELFT>(Type, S) || refersToGotEntry(Type, S);
 }
 
 template <class ELFT>
-bool MipsTargetInfo<ELFT>::refersToGotEntry(uint32_t Type) const {
+bool MipsTargetInfo<ELFT>::refersToGotEntry(uint32_t Type,
+                                            const SymbolBody &S) const {
   return Type == R_MIPS_GOT16 || Type == R_MIPS_CALL16;
 }
 

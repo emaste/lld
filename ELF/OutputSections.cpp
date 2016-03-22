@@ -63,8 +63,22 @@ template <class ELFT> void GotPltSection<ELFT>::addEntry(SymbolBody &Sym) {
   Entries.push_back(&Sym);
 }
 
+template <class ELFT>
+void GotPltSection<ELFT>::addTlsDescEntry(SymbolBody &Sym) {
+  Entries.push_back(nullptr);
+  Entries.push_back(nullptr);
+  // Some relocations are placed after all others ones.
+  // GotPlt records for them also follows that rule.
+  Sym.GotPltIndex = Tail;
+  Tail += 2;
+}
+
 template <class ELFT> bool GotPltSection<ELFT>::empty() const {
   return Entries.empty();
+}
+
+template <class ELFT> size_t GotPltSection<ELFT>::getTailIndex(uint32_t I) {
+  return Target->GotPltHeaderEntriesNum + Entries.size() - Tail + I;
 }
 
 template <class ELFT> void GotPltSection<ELFT>::finalize() {
@@ -76,7 +90,8 @@ template <class ELFT> void GotPltSection<ELFT>::writeTo(uint8_t *Buf) {
   Target->writeGotPltHeader(Buf);
   Buf += Target->GotPltHeaderEntriesNum * sizeof(uintX_t);
   for (const SymbolBody *B : Entries) {
-    Target->writeGotPlt(Buf, B->getPltVA<ELFT>());
+    if (B) // This might be TLS descriptor entry.
+      Target->writeGotPlt(Buf, B->getPltVA<ELFT>());
     Buf += sizeof(uintX_t);
   }
 }
@@ -114,6 +129,13 @@ template <class ELFT> bool GotSection<ELFT>::addDynTlsEntry(SymbolBody &Sym) {
   Entries.push_back(&Sym);
   Entries.push_back(nullptr);
   return true;
+}
+
+template <class ELFT> void GotSection<ELFT>::addTlsDescEntry() {
+  if (TlsDescEntryOff != uintX_t(-1))
+    return;
+  Entries.push_back(nullptr);
+  TlsDescEntryOff = (Entries.size() - 1) * sizeof(uintX_t);
 }
 
 // Reserves TLS entries for a TLS module ID and a TLS block offset.
@@ -220,6 +242,15 @@ template <class ELFT> void PltSection<ELFT>::writeTo(uint8_t *Buf) {
     Target->writePlt(Buf + Off, Got, Plt, B->PltIndex, RelOff);
     Off += Target->PltEntrySize;
   }
+
+  // If module uses TLS descriptor relocations, it requires double .got.plt
+  // entry and a special .plt entry as well. This plt entry is used for TLS
+  // descriptor resolver calls, and also dynamic entry DT_TLSDESC_PLT should be
+  // created to hold it's address.
+  if (Out<ELFT>::Got->hasTlsDescEntry())
+    Target->writePltTlsDescEntry(Buf + Off, this->getVA() + Off,
+                                 Out<ELFT>::Got->getTlsDescEntryVA(),
+                                 Out<ELFT>::GotPlt->getVA());
 }
 
 template <class ELFT> void PltSection<ELFT>::addEntry(SymbolBody &Sym) {
@@ -230,9 +261,21 @@ template <class ELFT> void PltSection<ELFT>::addEntry(SymbolBody &Sym) {
   Entries.push_back(std::make_pair(&Sym, RelOff));
 }
 
+template <class ELFT> bool PltSection<ELFT>::empty() const {
+  return Entries.empty() && !Out<ELFT>::Got->hasTlsDescEntry();
+}
+
+template <class ELFT>
+typename PltSection<ELFT>::uintX_t PltSection<ELFT>::getTlsDescEntryVA() const {
+  return this->getVA() + Target->PltZeroSize +
+         Entries.size() * Target->PltEntrySize;
+}
+
 template <class ELFT> void PltSection<ELFT>::finalize() {
   this->Header.sh_size =
       Target->PltZeroSize + Entries.size() * Target->PltEntrySize;
+  if (Out<ELFT>::Got->hasTlsDescEntry())
+    this->Header.sh_size += Target->PltTlsDescSize;
 }
 
 template <class ELFT>
@@ -243,12 +286,26 @@ RelocationSection<ELFT>::RelocationSection(StringRef Name)
   this->Header.sh_addralign = sizeof(uintX_t);
 }
 
-template <class ELFT>
-void RelocationSection<ELFT>::addReloc(const DynamicReloc<ELFT> &Reloc) {
+template <class ELFT> static void checkReloc(const DynamicReloc<ELFT> &Reloc) {
   SymbolBody *Sym = Reloc.Sym;
   if (!Reloc.UseSymVA && Sym)
     Sym->MustBeInDynSym = true;
+}
+
+template <class ELFT>
+void RelocationSection<ELFT>::addReloc(const DynamicReloc<ELFT> &Reloc) {
+  checkReloc(Reloc);
+  // Some relocations should be added after all others.
+  // Like R_*_TLSDESC must go after R_*_JUMP_SLOT ones.
+  // Tail here is amount of such special relocations.
+  Relocs.insert(Relocs.end() - Tail, Reloc);
+}
+
+template <class ELFT>
+void RelocationSection<ELFT>::addTlsDescReloc(const DynamicReloc<ELFT> &Reloc) {
+  checkReloc(Reloc);
   Relocs.push_back(Reloc);
+  ++Tail;
 }
 
 template <class ELFT>
@@ -268,6 +325,8 @@ typename ELFT::uint DynamicReloc<ELFT>::getOffset() const {
     return Sym->getGotVA<ELFT>();
   case Off_GotPlt:
     return Sym->getGotPltVA<ELFT>();
+  case Off_GotPltRev:
+    return Sym->getGotPltRevVA<ELFT>();
   }
   llvm_unreachable("invalid offset kind");
 }
@@ -563,6 +622,11 @@ template <class ELFT> void DynamicSection<ELFT>::finalize() {
     Add({DT_PLTREL, uint64_t(Config->Rela ? DT_RELA : DT_REL)});
   }
 
+  if (Out<ELFT>::Got->hasTlsDescEntry()) {
+    Add({DT_TLSDESC_GOT});
+    Add({DT_TLSDESC_PLT});
+  }
+
   Add({DT_SYMTAB, Out<ELFT>::DynSymTab});
   Add({DT_SYMENT, sizeof(Elf_Sym)});
   Add({DT_STRTAB, Out<ELFT>::DynStrTab});
@@ -632,6 +696,20 @@ template <class ELFT> void DynamicSection<ELFT>::finalize() {
   Header.sh_size = (Entries.size() + 1) * Header.sh_entsize;
 }
 
+template <class ELFT, class Entry, class ElfDyn>
+static void handleSpecialDynamic(const Entry &E, ElfDyn *P) {
+  switch (E.Tag) {
+  case DT_TLSDESC_GOT:
+    P->d_un.d_ptr = Out<ELFT>::Got->getTlsDescEntryVA();
+    break;
+  case DT_TLSDESC_PLT:
+    P->d_un.d_ptr = Out<ELFT>::Plt->getTlsDescEntryVA();
+    break;
+  default:
+    assert(false && "Unknown special dynamic section entry");
+  }
+}
+
 template <class ELFT> void DynamicSection<ELFT>::writeTo(uint8_t *Buf) {
   auto *P = reinterpret_cast<Elf_Dyn *>(Buf);
 
@@ -646,6 +724,9 @@ template <class ELFT> void DynamicSection<ELFT>::writeTo(uint8_t *Buf) {
       break;
     case Entry::PlainInt:
       P->d_un.d_val = E.Val;
+      break;
+    case Entry::Special:
+      handleSpecialDynamic<ELFT>(E, P);
       break;
     }
     ++P;
